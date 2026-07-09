@@ -103,17 +103,28 @@ curl -X POST http://localhost:8765/check/batch \
 
 | Signal              | Weight | Notes                                          |
 |---------------------|--------|------------------------------------------------|
-| Package age (days)  | 30%    | <7 days = near-zero score                      |
-| Download count      | 25%    | Proxy for real-world usage                     |
+| Package age (days)  | 25%    | <7 days = near-zero score                      |
+| Download count      | 20%    | Proxy for real-world usage                     |
 | Version count       | 15%    | 1 release = no maintenance history             |
-| Maintainer age      | 15%    | Placeholder; PyPI/npm auth required for prod   |
+| Maintainer age      | 10%    | Placeholder; PyPI/npm auth required for prod   |
 | Cross-ecosystem hit | 15%    | Real npm package suggested for Python? Red flag.|
+| GitHub repo signal  | 15%    | Repo age, last-push recency, commit count, stars, org vs. personal ownership |
+
+If a package doesn't link a discoverable GitHub repo (or the GitHub API call fails/rate-limits), the GitHub signal's weight is **redistributed proportionally** across the other signals rather than being dropped or scored as 0 — packages aren't penalized just for not hosting on GitHub.
+
+---
+
+## Configuration
+
+| Env var        | Required | Notes                                                                 |
+|-----------------|----------|------------------------------------------------------------------------|
+| `GITHUB_TOKEN`  | No       | Raises the GitHub API rate limit from 60/hr (unauthenticated) to 5000/hr. Without it, the GitHub signal still works but may degrade to "unavailable" sooner under load. |
 
 ---
 
 ## Caching
 
-Results are cached in-memory for 24 hours (configurable via `CACHE_TTL` in `main.py`).
+Results are cached in-memory: 24 hours for successful lookups (`CACHE_TTL`), 10 minutes for not-found/error results (`CACHE_TTL_ERROR`) — both configurable in `main.py`.
 
 ```bash
 # Cache stats
@@ -148,7 +159,7 @@ for pkg in packages:
 - [ ] Tier 4 enhancement: Full cross-ecosystem scoring (currently boolean flag)
 - [ ] Real download counts via pypistats.org + npm download API
 - [ ] Real maintainer account age via PyPI/npm authenticated APIs  
-- [ ] GitHub signal integration (stars, last commit, org ownership)
+- [x] GitHub signal integration (stars, last commit, org ownership)
 - [ ] Redis cache backend for multi-instance deployments
 - [ ] Docker image
 - [ ] Webhook/alert mode for continuous registry monitoring

@@ -33,9 +33,6 @@ These are scoped, well-defined contributions that don't require deep knowledge
 of the codebase. Perfect starting points:
 
 ### Easy
-- **Fix PyPI author field fallback** — the PyPI JSON API no longer reliably
-  returns `author` for packages that migrated to the new metadata format.
-  Fallback chain: `author` → `maintainer` → `project_urls` → `""`. See `fetch_pypi()` in `main.py`.
 - **Real npm download counts** — replace the placeholder estimate in `fetch_npm()`
   with a call to `https://api.npmjs.org/downloads/point/last-month/{package}`
 - **Real PyPI download counts** — replace the placeholder in `fetch_pypi()` with
@@ -44,9 +41,6 @@ of the codebase. Perfect starting points:
   build and push to Docker Hub on tag
 
 ### Medium
-- **GitHub signal integration** — add optional GitHub metadata to the trust score:
-  stars, last commit date, organization ownership. Hard signals that legitimate
-  packages have and squatters rarely do. `GITHUB_TOKEN` env var for rate limits.
 - **Redis cache backend** — swap the in-memory `_cache` dict for an optional Redis
   backend, configurable via `REDIS_URL` env var. Fall back to in-memory if not set.
 - **crates.io ecosystem** — add `fetch_crates()` hitting
