@@ -3,7 +3,7 @@
 **Package hallucination detection API** — a lightweight micro-service that scores
 AI-suggested packages for trustworthiness before they get installed.
 
-Part of the [Sentinel-Proxy AI Firewall](https://sentinel-proxy.skyblue-soft.com) ecosystem by Skyblue-Soft.
+Part of the [Sentinel-Proxy AI Firewall](https://sentinelaifirewall.com) ecosystem by Skyblue-Soft.
 
 ---
 
@@ -138,7 +138,7 @@ DELETE /cache
 
 ## Sentinel Integration
 
-SlopScan is designed to be queried by [Sentinel](https://sentinel-proxy.skyblue-soft.com)
+SlopScan is designed to be queried by [Sentinel](https://sentinelaifirewall.com)
 at response-time, extracting package names from LLM output before they reach agentic
 install pipelines. Wire it in as a Sentinel detection layer:
 
