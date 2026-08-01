@@ -399,16 +399,34 @@ async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient)
         cross = await fetch_pypi(package, client)
 
     if "error" in primary:
-        result = {
-            "package": package,
-            "ecosystem": ecosystem,
-            "found": False,
-            "error": primary["error"],
-            "trust_score": 0,
-            "risk": "DANGEROUS",
-            "flags": ["Package does not exist in registry — likely hallucinated"],
-            "cached": False,
-        }
+        error = primary["error"]
+        if error == "not_found":
+            # Confirmed 404 — the registry itself says this name doesn't exist.
+            result = {
+                "package": package,
+                "ecosystem": ecosystem,
+                "found": False,
+                "error": error,
+                "trust_score": 0,
+                "risk": "DANGEROUS",
+                "flags": ["Package does not exist in registry — likely hallucinated"],
+                "cached": False,
+            }
+        else:
+            # Any other error (timeout, rate limit, upstream 5xx, ...) is an
+            # infrastructure hiccup, not evidence the package doesn't exist.
+            # Scoring it as DANGEROUS would false-positive on real, popular
+            # packages whenever the registry is briefly slow or unreachable.
+            result = {
+                "package": package,
+                "ecosystem": ecosystem,
+                "found": None,
+                "error": error,
+                "trust_score": None,
+                "risk": "UNKNOWN",
+                "flags": [f"Registry lookup failed ({error}) — could not verify, not scored"],
+                "cached": False,
+            }
         _cache_set(cache_key, result, ttl=CACHE_TTL_ERROR)
         return result
 
@@ -565,6 +583,7 @@ async def check_batch(req: BatchRequest):
             "caution":    sum(1 for r in results if r.get("risk") == "CAUTION"),
             "suspicious": sum(1 for r in results if r.get("risk") == "SUSPICIOUS"),
             "dangerous":  sum(1 for r in results if r.get("risk") == "DANGEROUS"),
+            "unknown":    sum(1 for r in results if r.get("risk") == "UNKNOWN"),
         },
     }
 

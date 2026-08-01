@@ -81,6 +81,32 @@ def test_check_not_found_package():
     assert data["trust_score"] == 0
 
 
+@respx.mock
+def test_check_registry_timeout_is_unknown_not_dangerous():
+    respx.get("https://pypi.org/pypi/requests/json").mock(side_effect=httpx.TimeoutException("timed out"))
+    respx.get("https://registry.npmjs.org/requests").mock(return_value=httpx.Response(404))
+    resp = client.get("/check/pypi/requests")
+    assert resp.status_code == 200
+    data = resp.json()
+    # A transient registry timeout must not be scored the same as a confirmed
+    # nonexistent package — that would false-positive "DANGEROUS" on real,
+    # popular packages whenever the upstream registry is briefly unreachable.
+    assert data["risk"] == "UNKNOWN"
+    assert data["found"] is None
+    assert data["risk"] != "DANGEROUS"
+
+
+@respx.mock
+def test_check_registry_5xx_is_unknown_not_dangerous():
+    respx.get("https://pypi.org/pypi/requests/json").mock(return_value=httpx.Response(503))
+    respx.get("https://registry.npmjs.org/requests").mock(return_value=httpx.Response(404))
+    resp = client.get("/check/pypi/requests")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["risk"] == "UNKNOWN"
+    assert data["found"] is None
+
+
 def test_check_bad_ecosystem_returns_400():
     resp = client.get("/check/rubygems/somegem")
     assert resp.status_code == 400
