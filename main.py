@@ -184,6 +184,20 @@ def _score_github_signal(gh: dict) -> int:
     return _weighted_score(sub_scores, GITHUB_SUBWEIGHTS)
 
 
+def _github_signal_degraded_transiently(github_meta: dict) -> bool:
+    """True if the GitHub enrichment signal is missing for a reason that can
+    resolve on its own soon (rate limit reset, transient network/5xx) rather
+    than a stable fact about the package (no repo URL, repo genuinely 404s).
+    Callers should cache the overall result with the short error TTL in this
+    case — otherwise a passing rate-limit blip can under-score a package's
+    trust_score for a full day even after GitHub is reachable again.
+    """
+    if github_meta.get("available"):
+        return False
+    reason = github_meta.get("reason", "")
+    return reason in ("rate_limited", "request_error") or reason.startswith("http_5")
+
+
 # ---------------------------------------------------------------------------
 # PyPI fetcher
 # ---------------------------------------------------------------------------
@@ -522,7 +536,8 @@ async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient)
         "cached": False,
     }
 
-    _cache_set(cache_key, result)
+    result_ttl = CACHE_TTL_ERROR if _github_signal_degraded_transiently(github_meta) else CACHE_TTL
+    _cache_set(cache_key, result, ttl=result_ttl)
     return result
 
 

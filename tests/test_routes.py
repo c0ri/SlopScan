@@ -82,6 +82,45 @@ def test_check_not_found_package():
 
 
 @respx.mock
+def test_github_rate_limit_uses_short_cache_ttl(pypi_payload):
+    respx.get("https://pypi.org/pypi/requests/json").mock(return_value=httpx.Response(200, json=pypi_payload))
+    respx.get("https://registry.npmjs.org/requests").mock(return_value=httpx.Response(404))
+    respx.get(f"{GITHUB_API_BASE}/repos/psf/requests").mock(return_value=httpx.Response(429))
+
+    resp = client.get("/check/pypi/requests")
+    assert resp.status_code == 200
+    data = resp.json()
+    # package itself is still found/scored — only the github enrichment is missing
+    assert data["found"] is True
+    assert "github_signal" not in data["component_scores"]
+    assert any("GitHub signal unavailable" in f for f in data["flags"])
+
+    # but a passing GitHub rate-limit must not lock in a degraded trust_score
+    # for a full day — should get the short error TTL so it re-checks soon.
+    _, expires_at = main._cache["pypi:requests"]
+    remaining = expires_at - time.time()
+    assert remaining <= CACHE_TTL_ERROR
+    assert remaining > CACHE_TTL_ERROR - 30
+
+
+@respx.mock
+def test_github_no_repo_url_uses_long_cache_ttl(pypi_payload):
+    # No linkable GitHub repo is a stable fact about the package, not a
+    # transient failure — should keep the normal long success TTL.
+    pypi_payload["info"]["project_urls"] = {}
+    pypi_payload["info"]["home_page"] = None
+    respx.get("https://pypi.org/pypi/requests/json").mock(return_value=httpx.Response(200, json=pypi_payload))
+    respx.get("https://registry.npmjs.org/requests").mock(return_value=httpx.Response(404))
+
+    resp = client.get("/check/pypi/requests")
+    assert resp.status_code == 200
+
+    _, expires_at = main._cache["pypi:requests"]
+    remaining = expires_at - time.time()
+    assert remaining > CACHE_TTL_ERROR
+
+
+@respx.mock
 def test_check_registry_timeout_is_unknown_not_dangerous():
     respx.get("https://pypi.org/pypi/requests/json").mock(side_effect=httpx.TimeoutException("timed out"))
     respx.get("https://registry.npmjs.org/requests").mock(return_value=httpx.Response(404))
