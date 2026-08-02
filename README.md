@@ -153,6 +153,12 @@ for pkg in packages:
 
 ---
 
+## Claude Skill/Hooks Integration
+
+If you install SlopScan in a local docker container or someething, you can setup Claude or other to build a Skill and Hook to use it. I do both when running claude in direct mode so I'll show you how I built both the skill and the hook. The hook is much prefered because it's deterministic. Please check out my full write up article on my[dev.to/coridev site](https://dev.to/coridev/wiring-slopscan-into-claude-code-a-skill-a-hook-and-a-bug-i-almost-shipped-2i58)
+
+---
+
 ## Roadmap
 
 - [ ] Tier 3: Hallucination fingerprint database (known bad names per model)
