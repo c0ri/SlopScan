@@ -1,0 +1,18 @@
+services:
+  slopscan:
+    build: .
+    container_name: slopscan
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      # Optional: raises SlopScan's own GitHub API rate limit for the
+      # repo-richness signal from 60/hr (unauthenticated) to 5000/hr.
+      # Needs no scopes — only reads public repo metadata.
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/docs')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -26,6 +26,13 @@ pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8765 --reload
 ```
 
+Or with Docker:
+
+```bash
+cp .env.example .env  # optional: add GITHUB_TOKEN
+docker compose up
+```
+
 API docs available at `http://localhost:8765/docs`
 
 ---
@@ -167,7 +174,7 @@ If you install SlopScan in a local docker container or someething, you can setup
 - [ ] Real maintainer account age via PyPI/npm authenticated APIs  
 - [x] GitHub signal integration (stars, last commit, org ownership)
 - [ ] Redis cache backend for multi-instance deployments
-- [ ] Docker image
+- [x] Docker image
 - [ ] Webhook/alert mode for continuous registry monitoring
 
 ---
