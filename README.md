@@ -5,6 +5,8 @@ AI-suggested packages for trustworthiness before they get installed.
 
 Part of the [Sentinel-Proxy AI Firewall](https://sentinelaifirewall.com) ecosystem by Skyblue-Soft.
 
+I've made SlopScan available as part of a Package for Claude users, which includes Claude hook signing, secrets protection and more. Check it out here: [Claude Hook Pack](https://github.com/c0ri/sentinel-hook-pack)
+
 ---
 
 ## The Problem
