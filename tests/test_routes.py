@@ -370,3 +370,33 @@ def test_registry_timeout_flag_is_plain_language_but_error_code_stays_machine_re
     data = client.get("/check/pypi/slowpkg").json()
     assert data["risk"] == "UNKNOWN" and data["error"] == "timeout"
     assert data["flags"] == ["Registry lookup failed (timed out) — could not verify, not scored"]
+
+
+@respx.mock
+def test_npm_case_variant_does_not_poison_the_real_package_cache():
+    # npm is case-sensitive: "React" 404s, "react" is real. A lookup of the former
+    # must not leave a cached not-found verdict under the latter.
+    respx.get("https://registry.npmjs.org/React").mock(return_value=httpx.Response(404))
+    respx.get("https://pypi.org/pypi/React/json").mock(return_value=httpx.Response(404))
+    good = {"name": "react", "dist-tags": {"latest": "1.0.0"}, "maintainers": [{"name": "m"}],
+            "time": {"created": "2012-01-01T00:00:00.000Z", "1.0.0": "2012-01-01T00:00:00.000Z"},
+            "versions": {"1.0.0": {}}, "description": "x", "homepage": "https://e.com", "license": "MIT"}
+    respx.get("https://registry.npmjs.org/react").mock(return_value=httpx.Response(200, json=good))
+    respx.get("https://pypi.org/pypi/react/json").mock(return_value=httpx.Response(404))
+
+    assert client.get("/check/npm/React").json()["risk"] == "DANGEROUS"
+    real = client.get("/check/npm/react").json()
+    assert real["found"] is True and real["risk"] != "DANGEROUS"
+
+
+@respx.mock
+def test_pypi_cache_is_still_case_insensitive(pypi_payload):
+    pypi_payload["info"]["project_urls"] = {}
+    pypi_payload["info"]["home_page"] = None
+    route = respx.get("https://pypi.org/pypi/requests/json").mock(return_value=httpx.Response(200, json=pypi_payload))
+    respx.get("https://pypi.org/pypi/Requests/json").mock(return_value=httpx.Response(200, json=pypi_payload))
+    respx.get("https://registry.npmjs.org/requests").mock(return_value=httpx.Response(404))
+    respx.get("https://registry.npmjs.org/Requests").mock(return_value=httpx.Response(404))
+    first = client.get("/check/pypi/requests").json()
+    second = client.get("/check/pypi/Requests").json()
+    assert first["found"] and second["found"] and second["cached"] is True

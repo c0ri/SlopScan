@@ -435,7 +435,12 @@ def _registry_error_text(error: str) -> str:
 
 
 async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient) -> dict:
-    cache_key = f"{ecosystem}:{package.lower()}"
+    # PyPI lookups are case-insensitive, so one cache entry per name is right.
+    # npm's registry is case-sensitive ("React" is a 404, "react" is real), so
+    # npm entries must NOT share a key across spellings - otherwise one request
+    # for "React" caches a not-found verdict that then poisons "react" for every
+    # caller until the entry expires.
+    cache_key = f"{ecosystem}:{package.lower() if ecosystem == 'pypi' else package}"
     cached = _cache_get(cache_key)
     if cached:
         cached["cached"] = True
