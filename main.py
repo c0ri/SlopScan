@@ -60,6 +60,9 @@ WEIGHTS = {
     "github_signal":   15,   # Repo richness: age, commit history, stars, ownership.
 }
 
+# The cross-ecosystem signal only applies to packages younger than this.
+CROSS_ECOSYSTEM_YOUNG_DAYS = 365
+
 AGE_THRESHOLDS   = [(7, 0), (30, 20), (90, 45), (365, 70), (9999, 100)]
 DL_THRESHOLDS    = [(100, 0), (1_000, 20), (10_000, 50), (100_000, 75), (1_000_000, 100)]
 VER_THRESHOLDS   = [(1, 10), (3, 30), (5, 55), (10, 80), (9999, 100)]
@@ -423,7 +426,7 @@ async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient)
                 "error": error,
                 "trust_score": 0,
                 "risk": "DANGEROUS",
-                "flags": ["Package does not exist in registry — likely hallucinated"],
+                "flags": ["Package not found in registry (removed, hallucinated or never existed) — do not install"],
                 "cached": False,
             }
         else:
@@ -473,9 +476,15 @@ async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient)
 
     # Cross-ecosystem check (Tier 4)
     cross_exists = cross.get("found", False)
-    cross_score = 0 if cross_exists else 100
+    # Confusion attacks rely on a freshly registered public name, so an
+    # established package (a year or more old) that merely shares a name with an
+    # unrelated project in the other ecosystem is not a signal - penalizing it
+    # only adds noise to popular packages like `requests`. The raw fact is still
+    # reported via `cross_ecosystem_hit` below.
+    cross_suspicious = cross_exists and primary["age_days"] < CROSS_ECOSYSTEM_YOUNG_DAYS
+    cross_score = 0 if cross_suspicious else 100
     component_scores["cross_ecosystem"] = cross_score
-    if cross_exists:
+    if cross_suspicious:
         other = "npm" if ecosystem == "pypi" else "pypi"
         flags.append(
             f"Name also exists in {other} — possible cross-ecosystem confusion attack"

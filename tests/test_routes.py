@@ -223,3 +223,66 @@ def test_cache_ttl_long_for_success(pypi_payload, github_repo_payload):
     remaining = expires_at - time.time()
     assert remaining > CACHE_TTL_ERROR
     assert remaining <= CACHE_TTL
+
+
+def _young_pypi_payload(pypi_payload, days_old):
+    from datetime import datetime, timedelta, timezone
+    ts = (datetime.now(timezone.utc) - timedelta(days=days_old)).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    pypi_payload["releases"] = {"1.0.0": [{"upload_time_iso_8601": ts}]}
+    return _no_github(pypi_payload)
+
+
+def _no_github(pypi_payload):
+    # Keep these tests about the cross-ecosystem signal only: no GitHub lookups.
+    pypi_payload["info"]["project_urls"] = {}
+    pypi_payload["info"]["home_page"] = None
+    return pypi_payload
+
+
+@respx.mock
+def test_cross_ecosystem_name_clash_ignored_for_established_package(pypi_payload):
+    # `requests` exists on both PyPI and npm; the PyPI one is years old.
+    _no_github(pypi_payload)
+    respx.get("https://pypi.org/pypi/requests/json").mock(return_value=httpx.Response(200, json=pypi_payload))
+    respx.get("https://registry.npmjs.org/requests").mock(
+        return_value=httpx.Response(200, json={"name": "requests", "time": {"created": "2012-01-01T00:00:00.000Z"}, "versions": {"1.0.0": {}}})
+    )
+    data = client.get("/check/pypi/requests").json()
+    assert data["cross_ecosystem_hit"] is True  # the fact is still reported
+    assert data["component_scores"]["cross_ecosystem"] == 100
+    assert not any("cross-ecosystem" in f for f in data["flags"])
+
+
+@respx.mock
+def test_cross_ecosystem_name_clash_still_flagged_for_young_package(pypi_payload):
+    payload = _young_pypi_payload(pypi_payload, days_old=30)
+    respx.get("https://pypi.org/pypi/requests/json").mock(return_value=httpx.Response(200, json=payload))
+    respx.get("https://registry.npmjs.org/requests").mock(
+        return_value=httpx.Response(200, json={"name": "requests", "time": {"created": "2012-01-01T00:00:00.000Z"}, "versions": {"1.0.0": {}}})
+    )
+    data = client.get("/check/pypi/requests").json()
+    assert data["component_scores"]["cross_ecosystem"] == 0
+    assert any("cross-ecosystem confusion" in f for f in data["flags"])
+
+
+@respx.mock
+def test_cross_ecosystem_boundary_is_365_days(pypi_payload):
+    for days, expect_flag in ((364, True), (366, False)):
+        main._cache.clear()
+        payload = _young_pypi_payload(dict(pypi_payload), days_old=days)
+        respx.get("https://pypi.org/pypi/requests/json").mock(return_value=httpx.Response(200, json=payload))
+        respx.get("https://registry.npmjs.org/requests").mock(
+            return_value=httpx.Response(200, json={"name": "requests", "time": {"created": "2012-01-01T00:00:00.000Z"}, "versions": {"1.0.0": {}}})
+        )
+        data = client.get("/check/pypi/requests").json()
+        assert any("cross-ecosystem" in f for f in data["flags"]) is expect_flag, days
+
+
+@respx.mock
+def test_not_found_flag_does_not_claim_certainty():
+    respx.get("https://pypi.org/pypi/nope-zzq/json").mock(return_value=httpx.Response(404))
+    respx.get("https://registry.npmjs.org/nope-zzq").mock(return_value=httpx.Response(404))
+    data = client.get("/check/pypi/nope-zzq").json()
+    assert data["risk"] == "DANGEROUS"
+    flag = data["flags"][0]
+    assert "removed, hallucinated or never existed" in flag and "do not install" in flag
