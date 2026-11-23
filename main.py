@@ -408,6 +408,32 @@ async def fetch_github_signal(owner: str, repo: str, client: httpx.AsyncClient) 
 # ---------------------------------------------------------------------------
 # Trust scoring engine
 # ---------------------------------------------------------------------------
+_GITHUB_REASON_TEXT = {
+    "no_repo_url": "no source repository linked",
+    "not_found": "linked repository not found",
+    "rate_limited": "GitHub rate limit reached",
+    "request_error": "could not reach GitHub",
+}
+
+
+def _github_reason_text(reason: str) -> str:
+    """Plain-language version of a github_meta reason code for user-facing flags.
+    The raw code stays in the machine-readable fields; only the flag text changes."""
+    if reason in _GITHUB_REASON_TEXT:
+        return _GITHUB_REASON_TEXT[reason]
+    if reason.startswith("http_5"):
+        return "GitHub had a server error"
+    return "GitHub returned an error"
+
+
+def _registry_error_text(error: str) -> str:
+    if error == "timeout":
+        return "timed out"
+    if error.startswith("http_"):
+        return f"registry returned HTTP {error[5:]}"
+    return "registry error"
+
+
 async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient) -> dict:
     cache_key = f"{ecosystem}:{package.lower()}"
     cached = _cache_get(cache_key)
@@ -450,7 +476,7 @@ async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient)
                 "error": error,
                 "trust_score": None,
                 "risk": "UNKNOWN",
-                "flags": [f"Registry lookup failed ({error}) — could not verify, not scored"],
+                "flags": [f"Registry lookup failed ({_registry_error_text(error)}) — could not verify, not scored"],
                 "cached": False,
             }
         _cache_set(cache_key, result, ttl=CACHE_TTL_ERROR)
@@ -517,7 +543,7 @@ async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient)
             flags.append("GitHub repo is brand-new and personally owned")
     else:
         flags.append(
-            f"GitHub signal unavailable ({github_meta['reason']}) — weight redistributed across other signals"
+            f"GitHub signal unavailable ({_github_reason_text(github_meta['reason'])}) — scored from the other signals"
         )
 
     # Weighted trust score

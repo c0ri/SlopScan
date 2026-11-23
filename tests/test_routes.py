@@ -337,3 +337,36 @@ def test_npm_package_with_real_author_never_flagged():
 def test_npm_author_penalty_boundary_is_365_days():
     assert _npm_flags(_npm_payload(days_old=364))[1] is True
     assert _npm_flags(_npm_payload(days_old=366))[1] is False
+
+
+def test_github_reason_text_is_plain_language():
+    from main import _github_reason_text, _registry_error_text
+    assert _github_reason_text("no_repo_url") == "no source repository linked"
+    assert _github_reason_text("not_found") == "linked repository not found"
+    assert _github_reason_text("rate_limited") == "GitHub rate limit reached"
+    assert _github_reason_text("http_502") == "GitHub had a server error"
+    assert _github_reason_text("http_418") == "GitHub returned an error"
+    assert _registry_error_text("timeout") == "timed out"
+    assert _registry_error_text("http_503") == "registry returned HTTP 503"
+    assert _registry_error_text("weird") == "registry error"
+
+
+@respx.mock
+def test_user_facing_flags_do_not_leak_internal_codes(pypi_payload):
+    pypi_payload["info"]["project_urls"] = {}
+    pypi_payload["info"]["home_page"] = None
+    respx.get("https://pypi.org/pypi/requests/json").mock(return_value=httpx.Response(200, json=pypi_payload))
+    respx.get("https://registry.npmjs.org/requests").mock(return_value=httpx.Response(404))
+    data = client.get("/check/pypi/requests").json()
+    text = " ".join(data["flags"])
+    assert "no_repo_url" not in text and "weight redistributed" not in text
+    assert "no source repository linked" in text
+
+
+@respx.mock
+def test_registry_timeout_flag_is_plain_language_but_error_code_stays_machine_readable():
+    respx.get("https://pypi.org/pypi/slowpkg/json").mock(side_effect=httpx.ReadTimeout("t"))
+    respx.get("https://registry.npmjs.org/slowpkg").mock(return_value=httpx.Response(404))
+    data = client.get("/check/pypi/slowpkg").json()
+    assert data["risk"] == "UNKNOWN" and data["error"] == "timeout"
+    assert data["flags"] == ["Registry lookup failed (timed out) — could not verify, not scored"]
