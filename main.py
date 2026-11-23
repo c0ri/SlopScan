@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from typing import Optional
 from urllib.parse import urlparse
 import httpx
+import logging
 import time
 import asyncio
 import os
@@ -85,6 +86,8 @@ GITHUB_PUSH_RECENCY_THRESHOLDS = [(30, 100), (90, 80), (180, 60), (365, 35), (73
 GITHUB_COMMIT_THRESHOLDS       = [(1, 0), (5, 15), (20, 35), (100, 65), (500, 90), (999999, 100)]
 GITHUB_STAR_THRESHOLDS         = [(1, 0), (5, 10), (25, 30), (100, 55), (1000, 80), (999999, 100)]
 GITHUB_OWNER_TYPE_SCORES = {"Organization": 100, "User": 55}
+
+logger = logging.getLogger("slopscan")
 
 GITHUB_API_BASE = "https://api.github.com"
 
@@ -342,14 +345,36 @@ async def fetch_npm(package: str, client: httpx.AsyncClient) -> dict:
 # ---------------------------------------------------------------------------
 # GitHub repo-richness fetcher (optional signal — degrades gracefully)
 # ---------------------------------------------------------------------------
+# When GitHub rejects the configured GITHUB_TOKEN (401: revoked/expired), stop
+# sending it for this long. Public repo metadata needs no token, so we fall back
+# to unauthenticated requests (60/hr) instead of losing the GitHub signal
+# entirely - and we log loudly so the dead token gets replaced.
+GITHUB_TOKEN_REJECTED_BACKOFF_S = 600
+_github_token_rejected_until = 0.0
+
+
 async def fetch_github_signal(owner: str, repo: str, client: httpx.AsyncClient) -> dict:
-    headers = {"Accept": "application/vnd.github+json"}
+    global _github_token_rejected_until
+    base_headers = {"Accept": "application/vnd.github+json"}
     token = os.environ.get("GITHUB_TOKEN")
-    if token:
+    use_token = bool(token) and time.time() >= _github_token_rejected_until
+    headers = dict(base_headers)
+    if use_token:
         headers["Authorization"] = f"Bearer {token}"
 
+    # follow_redirects: a renamed/transferred repo answers 301 to /repositories/<id>;
+    # without following it every such package silently lost its GitHub signal.
     try:
-        repo_resp = await client.get(f"{GITHUB_API_BASE}/repos/{owner}/{repo}", headers=headers, timeout=8.0)
+        repo_resp = await client.get(f"{GITHUB_API_BASE}/repos/{owner}/{repo}", headers=headers,
+                                     timeout=8.0, follow_redirects=True)
+        if repo_resp.status_code == 401 and use_token:
+            logger.error("GITHUB_TOKEN was rejected by GitHub (401 Bad credentials) - it is revoked or "
+                         "expired. Falling back to unauthenticated requests (60/hr) for %ds; replace the token.",
+                         GITHUB_TOKEN_REJECTED_BACKOFF_S)
+            _github_token_rejected_until = time.time() + GITHUB_TOKEN_REJECTED_BACKOFF_S
+            headers = dict(base_headers)
+            repo_resp = await client.get(f"{GITHUB_API_BASE}/repos/{owner}/{repo}", headers=headers,
+                                         timeout=8.0, follow_redirects=True)
     except httpx.HTTPError:
         return {"available": False, "reason": "request_error"}
 
@@ -371,6 +396,7 @@ async def fetch_github_signal(owner: str, repo: str, client: httpx.AsyncClient) 
                 params={"per_page": 1},
                 headers=headers,
                 timeout=8.0,
+                follow_redirects=True,
             )
         except httpx.HTTPError:
             commits_resp = None

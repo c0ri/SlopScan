@@ -229,3 +229,59 @@ async def test_fetch_github_signal_skips_commits_call_when_rate_limit_exhausted(
 
     assert commits_route.call_count == 0
     assert result["commit_count_reliable"] is False
+
+
+@pytest.fixture(autouse=False)
+def reset_token_backoff():
+    import main
+    main._github_token_rejected_until = 0.0
+    yield
+    main._github_token_rejected_until = 0.0
+
+
+@respx.mock
+async def test_fetch_github_signal_follows_repo_redirect(github_repo_payload):
+    # Renamed/transferred repos answer 301 -> /repositories/<id>.
+    respx.get(f"{GITHUB_API_BASE}/repos/old/name").mock(
+        return_value=httpx.Response(301, headers={"Location": f"{GITHUB_API_BASE}/repositories/123"})
+    )
+    respx.get(f"{GITHUB_API_BASE}/repositories/123").mock(return_value=httpx.Response(200, json=github_repo_payload))
+    respx.get(f"{GITHUB_API_BASE}/repos/old/name/commits").mock(return_value=httpx.Response(200, json=[]))
+    async with httpx.AsyncClient() as client:
+        result = await fetch_github_signal("old", "name", client)
+    assert result["available"] is True and result["stars"] == github_repo_payload["stargazers_count"]
+
+
+@respx.mock
+async def test_rejected_token_falls_back_to_unauthenticated_and_backs_off(monkeypatch, github_repo_payload, reset_token_backoff, caplog):
+    import logging
+    monkeypatch.setenv("GITHUB_TOKEN", "revoked-token")
+
+    def responder(request):
+        if request.headers.get("Authorization"):
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        return httpx.Response(200, json=github_repo_payload)
+
+    repo_route = respx.get(f"{GITHUB_API_BASE}/repos/psf/requests").mock(side_effect=responder)
+    respx.get(f"{GITHUB_API_BASE}/repos/psf/requests/commits").mock(return_value=httpx.Response(200, json=[]))
+    with caplog.at_level(logging.ERROR, logger="slopscan"):
+        async with httpx.AsyncClient() as client:
+            first = await fetch_github_signal("psf", "requests", client)
+            second = await fetch_github_signal("psf", "requests", client)
+
+    assert first["available"] is True and second["available"] is True
+    assert "GITHUB_TOKEN was rejected" in caplog.text
+    # call 1: authed (401) then unauthed retry; call 2 (inside the backoff window): unauthed only
+    sent_auth = [bool(c.request.headers.get("Authorization")) for c in repo_route.calls]
+    assert sent_auth == [True, False, False]
+
+
+@respx.mock
+async def test_valid_token_is_unaffected_by_backoff_logic(monkeypatch, github_repo_payload, reset_token_backoff):
+    monkeypatch.setenv("GITHUB_TOKEN", "good-token")
+    repo_route = respx.get(f"{GITHUB_API_BASE}/repos/psf/requests").mock(return_value=httpx.Response(200, json=github_repo_payload))
+    respx.get(f"{GITHUB_API_BASE}/repos/psf/requests/commits").mock(return_value=httpx.Response(200, json=[]))
+    async with httpx.AsyncClient() as client:
+        await fetch_github_signal("psf", "requests", client)
+        await fetch_github_signal("psf", "requests", client)
+    assert [bool(c.request.headers.get("Authorization")) for c in repo_route.calls] == [True, True]
