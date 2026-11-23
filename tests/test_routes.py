@@ -286,3 +286,54 @@ def test_not_found_flag_does_not_claim_certainty():
     assert data["risk"] == "DANGEROUS"
     flag = data["flags"][0]
     assert "removed, hallucinated or never existed" in flag and "do not install" in flag
+
+
+def _npm_payload(days_old, maintainers=True, author=None):
+    from datetime import datetime, timedelta, timezone
+    ts = (datetime.now(timezone.utc) - timedelta(days=days_old)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    d = {
+        "name": "somepkg", "dist-tags": {"latest": "1.0.0"},
+        "time": {"created": ts, "1.0.0": ts}, "versions": {"1.0.0": {}},
+        "description": "x", "homepage": "https://example.com", "license": "MIT",
+    }
+    if maintainers:
+        d["maintainers"] = [{"name": "someone"}]
+    if author:
+        d["author"] = {"name": author}
+    return d
+
+
+def _npm_flags(payload):
+    with respx.mock:
+        respx.get("https://registry.npmjs.org/somepkg").mock(return_value=httpx.Response(200, json=payload))
+        respx.get("https://pypi.org/pypi/somepkg/json").mock(return_value=httpx.Response(404))
+        main._cache.clear()
+        data = client.get("/check/npm/somepkg").json()
+    return data, any("No author/maintainer info" in f for f in data["flags"])
+
+
+def test_npm_established_package_with_maintainers_not_flagged_for_missing_author():
+    data, flagged = _npm_flags(_npm_payload(days_old=800))
+    assert not flagged
+    assert data["metadata"]["author"] == ""  # "author" keeps its literal meaning
+
+
+def test_npm_young_package_still_penalized_for_missing_author():
+    _, flagged = _npm_flags(_npm_payload(days_old=30))
+    assert flagged
+
+
+def test_npm_established_package_without_any_maintainer_still_flagged():
+    _, flagged = _npm_flags(_npm_payload(days_old=800, maintainers=False))
+    assert flagged
+
+
+def test_npm_package_with_real_author_never_flagged():
+    for days in (10, 800):
+        _, flagged = _npm_flags(_npm_payload(days_old=days, author="A. Person"))
+        assert not flagged
+
+
+def test_npm_author_penalty_boundary_is_365_days():
+    assert _npm_flags(_npm_payload(days_old=364))[1] is True
+    assert _npm_flags(_npm_payload(days_old=366))[1] is False

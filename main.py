@@ -63,6 +63,10 @@ WEIGHTS = {
 # The cross-ecosystem signal only applies to packages younger than this.
 CROSS_ECOSYSTEM_YOUNG_DAYS = 365
 
+# A package at least this old with a listed maintainer (but no author field)
+# is not penalized for "no author info" - npm omits author on many real packages.
+ESTABLISHED_PUBLISHER_DAYS = 365
+
 AGE_THRESHOLDS   = [(7, 0), (30, 20), (90, 45), (365, 70), (9999, 100)]
 DL_THRESHOLDS    = [(100, 0), (1_000, 20), (10_000, 50), (100_000, 75), (1_000_000, 100)]
 VER_THRESHOLDS   = [(1, 10), (3, 30), (5, 55), (10, 80), (9999, 100)]
@@ -312,6 +316,10 @@ async def fetch_npm(package: str, client: httpx.AsyncClient) -> dict:
     latest = data.get("dist-tags", {}).get("latest", "unknown")
     author_info = data.get("author", {})
     author = author_info.get("name", "") if isinstance(author_info, dict) else str(author_info)
+    # npm omits the top-level "author" on many legitimate packages (react, next,
+    # moment, ...) even though every package has at least one publishing
+    # maintainer. Recorded separately so "author" keeps its literal meaning.
+    publisher_known = bool(author) or bool(data.get("maintainers"))
 
     return {
         "found": True,
@@ -322,6 +330,7 @@ async def fetch_npm(package: str, client: httpx.AsyncClient) -> dict:
         "version_count": version_count,
         "downloads_estimate": version_count * 500,   # placeholder; use npm download counts API for prod
         "author": author,
+        "publisher_known": publisher_known,
         "summary": data.get("description", ""),
         "home_page": data.get("homepage", ""),
         "license": data.get("license", ""),
@@ -514,7 +523,12 @@ async def score_package(ecosystem: str, package: str, client: httpx.AsyncClient)
     # Weighted trust score
     trust_score = _weighted_score(component_scores, WEIGHTS)
 
-    if not primary.get("author"):
+    # A missing npm author field is only noise on an established package; on a
+    # young one the penalty stays (it is where fresh typosquats/malware live).
+    publisher_ok = primary.get("author") or (
+        primary.get("publisher_known") and primary["age_days"] >= ESTABLISHED_PUBLISHER_DAYS
+    )
+    if not publisher_ok:
         flags.append("No author/maintainer info")
         trust_score = max(0, trust_score - 10)
 
